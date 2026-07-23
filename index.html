@@ -2,22 +2,135 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>WE ALL FLOAT — a Derry arcade tragedy</title>
 <style>
   :root { --ink:#0a0c0b; }
-  html,body{margin:0;padding:0;background:var(--ink);height:100%;overflow:hidden;}
-  body{display:flex;align-items:center;justify-content:center;}
-  canvas{
+  html, body {
+    margin:0; padding:0; background:var(--ink); height:100%; overflow:hidden;
+    user-select:none; -webkit-user-select:none; touch-action:manipulation;
+  }
+  body { display:flex; align-items:center; justify-content:center; flex-direction:column; position:relative; }
+  
+  #game-container {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  canvas {
     image-rendering:pixelated;
-    max-width:100vw;max-height:100vh;
+    max-width:100vw; max-height:100vh;
     aspect-ratio:16/9;
     box-shadow:0 0 120px rgba(20,60,40,.25);
+  }
+
+  /* --- Touch Controls CSS --- */
+  .touch-ui {
+    position: absolute;
+    top: 0; left: 0; width: 100%; height: 100%;
+    pointer-events: none; /* Let clicks pass through empty spaces */
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    box-sizing: border-box;
+    padding: 20px;
+    z-index: 10;
+  }
+
+  .dpad, .action-btns {
+    display: grid;
+    gap: 10px;
+    pointer-events: auto;
+  }
+
+  /* 3x3 Grid for D-Pad */
+  .dpad {
+    grid-template-columns: repeat(3, 55px);
+    grid-template-rows: repeat(3, 55px);
+  }
+
+  /* Action Buttons Column */
+  .action-btns {
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 15px;
+    margin-bottom: 10px;
+  }
+
+  .touch-btn {
+    background: rgba(20, 30, 25, 0.65);
+    border: 2px solid rgba(180, 200, 190, 0.35);
+    border-radius: 50%;
+    color: #cfd8cf;
+    font-family: Georgia, serif;
+    font-weight: bold;
+    font-size: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: none;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+  }
+
+  .touch-btn:active, .touch-btn.active {
+    background: rgba(232, 195, 58, 0.4);
+    border-color: #e8c33a;
+    color: #fff;
+    transform: scale(0.95);
+  }
+
+  /* D-Pad positioning */
+  #btn-up    { grid-column: 2; grid-row: 1; border-radius: 12px; }
+  #btn-left  { grid-column: 1; grid-row: 2; border-radius: 12px; }
+  #btn-right { grid-column: 3; grid-row: 2; border-radius: 12px; }
+  #btn-down  { grid-column: 2; grid-row: 3; border-radius: 12px; }
+
+  /* Action buttons styling */
+  .action-btn {
+    width: 65px;
+    height: 65px;
+    border-radius: 50%;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+
+  #btn-throw { background: rgba(180, 40, 40, 0.6); }
+  #btn-jump  { background: rgba(40, 120, 80, 0.6); }
+
+  /* Hide on devices without touch by default, show when touched */
+  @media (hover: hover) and (pointer: fine) {
+    .touch-ui { opacity: 0.3; transition: opacity 0.3s; }
+    .touch-ui:hover { opacity: 1; }
   }
 </style>
 </head>
 <body>
-<canvas id="c" width="960" height="540"></canvas>
+
+<div id="game-container">
+  <canvas id="c" width="960" height="540"></canvas>
+
+  <!-- Mobile Touch Overlay -->
+  <div class="touch-ui" id="touch-controls">
+    <div class="dpad">
+      <div class="touch-btn" id="btn-up">▲</div>
+      <div class="touch-btn" id="btn-left">◀</div>
+      <div class="touch-btn" id="btn-right">▶</div>
+      <div class="touch-btn" id="btn-down">▼</div>
+    </div>
+    <div class="action-btns">
+      <div class="touch-btn action-btn" id="btn-jump">JUMP</div>
+      <div class="touch-btn action-btn" id="btn-throw">ROCK</div>
+    </div>
+  </div>
+</div>
+
 <script>
 "use strict";
 /* =========================================================
@@ -36,7 +149,6 @@ const GRAV = 0.62;
 const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
 const rand = (a,b)=>a+Math.random()*(b-a);
 const irand = (a,b)=>Math.floor(rand(a,b+1));
-// deterministic hash for brick texture
 function hash2(i,j){ let n = i*374761393 + j*668265263; n = (n^(n>>13))*1274126177; return ((n^(n>>16))>>>0)/4294967295; }
 const aabb=(a,b)=> a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y;
 
@@ -50,6 +162,66 @@ addEventListener("keydown", e=>{
   if(e.key==="Enter") onEnter();
 });
 addEventListener("keyup", e=>{ keys[e.key]=false; });
+
+/* Touch Controls Handler */
+function setupTouchControls() {
+  const map = {
+    "btn-left": "ArrowLeft",
+    "btn-right": "ArrowRight",
+    "btn-up": "ArrowUp",
+    "btn-down": "ArrowDown",
+    "btn-jump": "ArrowUp",
+    "btn-throw": " "
+  };
+
+  const triggerInput = (keyName, isPressed) => {
+    if (!keyName) return;
+    
+    // Title/GameOver screen handler
+    if (isPressed && (state === "TITLE" || state === "GAMEOVER")) {
+      if (keyName === "ArrowUp" || keyName === "ArrowDown") {
+        if (state === "TITLE") difficulty = 1 - difficulty;
+      } else {
+        onEnter();
+      }
+      return;
+    }
+
+    keys[keyName] = isPressed;
+  };
+
+  Object.keys(map).forEach(id => {
+    const btn = document.getElementById(id);
+    const keyName = map[id];
+
+    const handleStart = (e) => {
+      e.preventDefault();
+      btn.classList.add("active");
+      triggerInput(keyName, true);
+    };
+
+    const handleEnd = (e) => {
+      e.preventDefault();
+      btn.classList.remove("active");
+      triggerInput(keyName, false);
+    };
+
+    btn.addEventListener("touchstart", handleStart, {passive: false});
+    btn.addEventListener("touchend", handleEnd, {passive: false});
+    btn.addEventListener("touchcancel", handleEnd, {passive: false});
+    btn.addEventListener("mousedown", handleStart);
+    btn.addEventListener("mouseup", handleEnd);
+    btn.addEventListener("mouseleave", handleEnd);
+  });
+
+  // Tap anywhere on canvas to start on Title/Game Over screen
+  cv.addEventListener("pointerdown", () => {
+    if (state === "TITLE" || state === "GAMEOVER") {
+      onEnter();
+    }
+  });
+}
+setupTouchControls();
 
 /* ---------------- audio ---------------- */
 const Audio2 = {
@@ -98,10 +270,9 @@ const Audio2 = {
     src.connect(f); f.connect(g); g.connect(dest||this.master);
     src.start(t); src.stop(t+dur+0.02);
   },
-  /* gloomy darkwave sequencer: E minor, 100 bpm, 8th-note steps */
   schedule(){
     if(!this.started) return;
-    const stepDur = 60/100/2; // 0.3s
+    const stepDur = 60/100/2;
     while(this.nextT < this.ctx.currentTime + 0.12){
       this.playStep(this.step % 32, this.nextT, stepDur);
       this.nextT += stepDur;
@@ -114,17 +285,13 @@ const Audio2 = {
                   E2,0,E2,0, G2,0,A2,0, C2,0,C2,0, B1,0,B1,B1];
     const b = bass[s];
     if(b) this.tone(t, b, dur*0.95, "sawtooth", 0.16, b*0.99, this.musicGain);
-    // kick on the quarters
     if(s%4===0) this.tone(t, 120, 0.14, "sine", 0.5, 40, this.musicGain);
-    // hat off-beats
     if(s%4===2) this.noise(t, 0.05, 0.10, 6000, this.musicGain);
-    // cold pad, once per bar
     if(s%8===0){
       const root = (s<16)? E2*4 : (s<24? C2*4 : B1*4);
       this.tone(t, root,      dur*8, "triangle", 0.045, root, this.musicGain);
-      this.tone(t, root*1.19, dur*8, "triangle", 0.035, root*1.19, this.musicGain); // minor third-ish
+      this.tone(t, root*1.19, dur*8, "triangle", 0.035, root*1.19, this.musicGain);
     }
-    // sparse eerie arp high up
     if(s===12||s===28) this.tone(t, E2*8, 0.5, "sine", 0.05, E2*8*0.5, this.musicGain);
   },
   sfxThrow(hard){
@@ -182,7 +349,7 @@ let deathTimer = 0, shake = 0, flash = 0;
 const player = {
   x:120, y:GROUND_Y-46, w:24, h:46, vx:0, vy:0,
   onGround:true, face:1, duck:false, raincoat:true,
-  weapon:"rock",   // rock | silver
+  weapon:"rock",
   invuln:0, throwCd:0, anim:0, jumps:0, upWas:false
 };
 
@@ -193,7 +360,7 @@ let particles = [];
 let platforms = [];
 let drips = [];
 let bgBalloons = [];
-let genX = 0;          // world generation frontier
+let genX = 0;
 let spawnT = 0;
 let boss = null, bossAt = 350, bossCount = 0;
 
@@ -206,7 +373,7 @@ function resetRun(){
   player.vx=0; player.vy=0; player.onGround=true; player.duck=false;
   player.raincoat=true; player.weapon="rock"; player.invuln=0; player.throwCd=0;
   projectiles=[]; enemies=[]; pickups=[]; particles=[];
-  if(boss){ boss=null; bossAt = dist + 40; }   // breathe before the rematch
+  if(boss){ boss=null; bossAt = dist + 40; }
   spawnT = difficulty===0 ? 110 : 60;
 }
 function fullReset(){
@@ -246,7 +413,7 @@ function spawnEnemy(){
   }
 }
 
-/* ---------------- boss: the clown in the drain ---------------- */
+/* ---------------- boss ---------------- */
 function spawnBoss(){
   const hp = 16 + 8*bossCount + (difficulty===1? 6:0);
   boss = {x:cameraX+W+60, y:180, w:46, h:70, hp, maxHp:hp,
@@ -269,7 +436,6 @@ function updateBoss(){
   const b = boss; b.t++;
   if(b.flash>0) b.flash--;
   const D = DIFFS[difficulty];
-  // phase change: wounded clown drops and becomes the spider
   if(b.phase==="clown" && b.hp <= b.maxHp*0.45){
     b.phase="spider"; b.mode="fall"; b.vy=0;
     b.w=66; b.h=44;
@@ -292,7 +458,7 @@ function updateBoss(){
         }else{
           b.mode="swoop"; b.u=0;
           b.sx=b.x; b.sy=b.y;
-          b.cx2=player.x-30; b.cy2=player.y+50;   // control point dips through the player
+          b.cx2=player.x-30; b.cy2=player.y+50;
           b.ex=cameraX+W-180; b.ey=110;
         }
       }
@@ -306,7 +472,6 @@ function updateBoss(){
       }
     }
   }else{
-    // spider phase: gravity + scuttle + hops
     b.vy += GRAV; b.y += b.vy;
     if(b.y+b.h >= GROUND_Y){ b.y=GROUND_Y-b.h; b.vy=0; b.onGround=true; }
     else b.onGround=false;
@@ -349,7 +514,7 @@ function hurtPlayer(){
     player.raincoat=false;
     player.invuln=DIFFS[difficulty].invuln;
     flash=6; shake=8;
-    burst(player.x+12, player.y+16, "#e8c33a", 22, 3.5);   // raincoat shreds
+    burst(player.x+12, player.y+16, "#e8c33a", 22, 3.5);
     Audio2.sfxHurt();
   }else{
     state="DYING"; deathTimer=110; deaths++;
@@ -394,7 +559,6 @@ function update(){
   /* -------- PLAY -------- */
   generateWorld(cameraX + W*2);
 
-  // input
   const left = keys["ArrowLeft"], right = keys["ArrowRight"];
   player.duck = !!keys["ArrowDown"] && player.onGround;
   const spd = player.duck? 0 : 3.6;
@@ -440,17 +604,15 @@ function update(){
   if(player.vx!==0 && player.onGround) player.anim+=0.25;
   if(player.onGround) player.jumps=0;
 
-  // camera: gentle forward pull, follows player
+  // camera
   const targetCam = player.x - 200;
   cameraX = Math.max(cameraX, targetCam);
   dist = Math.max(dist, Math.floor(player.x/12));
   bestDist = Math.max(bestDist, dist);
 
-  // boss encounters
   if(!boss && dist >= bossAt) spawnBoss();
   if(boss) updateBoss();
 
-  // spawn pacing ramps up slowly with distance
   if(!boss) spawnT--;
   if(spawnT<=0 && !boss){
     spawnEnemy();
@@ -472,7 +634,6 @@ function update(){
     if(e.type==="towny"){
       e.vy += GRAV; e.y += e.vy;
       if(e.y+e.h>=GROUND_Y){ e.y=GROUND_Y-e.h; e.vy=0; e.onGround=true; }
-      // shamble toward player
       const dir = player.x < e.x ? -1 : 1;
       e.x += Math.abs(e.vx)*dir;
     }else if(e.type==="leech"){
@@ -493,7 +654,7 @@ function update(){
   }
   enemies = enemies.filter(e => e.x > cameraX-120 && e.hp>0);
 
-  // projectile hits
+  // hits
   for(const pr of projectiles){
     for(const e of enemies){
       if(e.hp>0 && aabb(pr,e)){
@@ -542,7 +703,6 @@ function update(){
   }
   pickups = pickups.filter(pk=>!pk.dead && pk.x > cameraX-60);
 
-  // player collisions
   const pbox = {x:player.x, y:player.y, w:player.w, h:player.h};
   for(const e of enemies){
     if(e.hp>0 && aabb(pbox,e)){ hurtPlayer(); break; }
@@ -569,21 +729,15 @@ function render(){
 
   if(state==="TITLE"){ drawTitle(); cx.restore(); return; }
 
-  // pickups
   for(const pk of pickups) drawPickup(pk);
-  // ground shadows for readability
   cx.fillStyle="rgba(0,0,0,0.42)";
   const shadow=(wx,w)=>{ cx.beginPath(); cx.ellipse(wx-cameraX, GROUND_Y+4, w, 4, 0, 0, Math.PI*2); cx.fill(); };
   for(const e of enemies){ if(e.type!=="balloon") shadow(e.x+e.w/2, e.w*0.6); }
   if(state!=="GAMEOVER") shadow(player.x+player.w/2, 14);
-  // enemies
   for(const e of enemies) drawEnemy(e);
   if(boss) drawBoss();
-  // player
   if(state!=="GAMEOVER") drawPlayer();
-  // projectiles
   for(const pr of projectiles) drawProjectile(pr);
-  // particles
   for(const p of particles){
     cx.globalAlpha = clamp(p.life/30,0,1);
     cx.fillStyle=p.color;
@@ -591,7 +745,6 @@ function render(){
   }
   cx.globalAlpha=1;
 
-  // faint lantern glow around the kid so the action reads
   if(state!=="GAMEOVER"){
     const lx=player.x-cameraX+12, ly=player.y+20;
     const lg=cx.createRadialGradient(lx,ly,12,lx,ly,170);
@@ -611,16 +764,13 @@ function render(){
   cx.restore();
 }
 
-/* ---- environment ---- */
 function drawSewer(){
-  // base
   const g = cx.createLinearGradient(0,0,0,H);
   g.addColorStop(0,"#05070a");
   g.addColorStop(0.55,"#0b1310");
   g.addColorStop(1,"#0d1a14");
   cx.fillStyle=g; cx.fillRect(0,0,W,H);
 
-  // deep background arches (slow parallax)
   const p1 = cameraX*0.25;
   cx.fillStyle="#0a100d";
   for(let i=Math.floor(p1/300)-1; i<(p1+W)/300+1; i++){
@@ -631,7 +781,6 @@ function drawSewer(){
     cx.fill();
   }
 
-  // far background red balloons, drifting in the dark
   for(const b of bgBalloons){
     const x = b.x - cameraX*0.25;
     if(x<-40||x>W+40) continue;
@@ -644,10 +793,8 @@ function drawSewer(){
     cx.globalAlpha=1;
   }
 
-  // mid wall bricks
   drawBricks(cameraX*0.55, 0, GROUND_Y, 46, 22, "#101a15", "#0c1410", 0.9);
 
-  // pipes (mid parallax)
   const p2 = cameraX*0.55;
   cx.fillStyle="#182420";
   cx.fillRect(0, 54, W, 26);
@@ -663,7 +810,6 @@ function drawSewer(){
     cx.fillRect(x, 130, 30, 8); cx.fillRect(x, 210, 30, 8);
   }
 
-  // drips
   cx.fillStyle="rgba(140,190,170,0.5)";
   for(const d of drips){
     const x = d.x - cameraX*0.55;
@@ -672,9 +818,7 @@ function drawSewer(){
     cx.fillRect(x, 84 + t*(GROUND_Y-90), 2, 8+t*6);
   }
 
-  // floor
   drawBricks(cameraX, GROUND_Y, H-GROUND_Y, 40, 18, "#1a2420", "#131b17", 1);
-  // slime lip
   cx.fillStyle="#2f5240";
   cx.fillRect(0, GROUND_Y, W, 5);
   cx.fillStyle="rgba(70,140,100,.35)";
@@ -682,7 +826,6 @@ function drawSewer(){
     const x=i*57-cameraX;
     if(hash2(i,7)<0.5) cx.fillRect(x, GROUND_Y+3, 22, 3+hash2(i,3)*6);
   }
-  // greenish water glow at very bottom
   const wg = cx.createLinearGradient(0,H-36,0,H);
   wg.addColorStop(0,"rgba(20,60,40,0)");
   wg.addColorStop(1,"rgba(38,105,70,0.5)");
@@ -693,7 +836,6 @@ function drawSewer(){
     cx.fillRect(x, H-14+Math.sin(frame*0.05+i)*3, 60, 2);
   }
 
-  // platforms
   for(const p of platforms){
     const x=p.x-cameraX;
     if(x+p.w<0||x>W) continue;
@@ -727,7 +869,6 @@ function drawFog(){
   cx.fillStyle=f; cx.fillRect(0,0,W,H);
 }
 
-/* ---- actors ---- */
 function drawPlayer(){
   const x = player.x - cameraX, y = player.y;
   const blink = player.invuln>0 && (frame%8<4);
@@ -743,42 +884,35 @@ function drawPlayer(){
   cx.globalAlpha=1;
 }
 function drawKid(x,y,f,run,coat,duck){
-  const bodyC = coat? "#e8c33a" : "#7d8a96";   // raincoat yellow vs grey shirt
+  const bodyC = coat? "#e8c33a" : "#7d8a96";
   const trimC = coat? "#b8952a" : "#5d6875";
-  const legC  = coat? "#caa62f" : "#3f4c66";   // jeans when coatless
+  const legC  = coat? "#caa62f" : "#3f4c66";
   if(duck){
-    // crouched blob
     cx.fillStyle=legC; cx.fillRect(x+3, y+22, 18, 8);
     cx.fillStyle=bodyC; cx.fillRect(x+1, y+8, 22, 16);
     cx.fillStyle=trimC; cx.fillRect(x+1, y+20, 22, 3);
-    // hood / head
     cx.fillStyle= coat? bodyC : "#e6c39a";
     cx.fillRect(x+ (f>0?8:2), y, 14, 12);
     if(coat){ cx.fillStyle="#0d0f12"; cx.fillRect(x+(f>0?12:4), y+3, 8, 6); }
     cx.fillStyle="#0d0f12"; cx.fillRect(x+(f>0?17:5), y+4, 2,2);
     return;
   }
-  // legs
   cx.fillStyle=legC;
   if(run===0){ cx.fillRect(x+3, y+34, 7, 12); cx.fillRect(x+14, y+32, 7, 14); }
   else       { cx.fillRect(x+3, y+32, 7, 14); cx.fillRect(x+14, y+34, 7, 12); }
-  // boots
   cx.fillStyle= coat? "#2e2417" : "#22201d";
   cx.fillRect(x+2, y+44, 9, 3); cx.fillRect(x+13, y+44, 9, 3);
-  // coat / torso
   cx.fillStyle=bodyC; cx.fillRect(x+1, y+12, 22, 24);
   cx.fillStyle=trimC; cx.fillRect(x+1, y+32, 22, 3);
   if(coat){ cx.fillStyle=trimC; cx.fillRect(x+11, y+12, 2, 20); }
-  // arm (throwing side)
   cx.fillStyle=bodyC;
   cx.fillRect(x+(f>0?18:0), y+16, 6, 12);
-  // head / hood
   if(coat){
     cx.fillStyle=bodyC; cx.fillRect(x+3, y-2, 18, 15);
     cx.fillStyle="#0d0f12"; cx.fillRect(x+(f>0?8:3), y+2, 12, 9);
     cx.fillStyle="#e6c39a"; cx.fillRect(x+(f>0?9:5), y+3, 9, 7);
   }else{
-    cx.fillStyle="#5a4630"; cx.fillRect(x+4, y-2, 16, 6);      // hair
+    cx.fillStyle="#5a4630"; cx.fillRect(x+4, y-2, 16, 6);
     cx.fillStyle="#e6c39a"; cx.fillRect(x+4, y+2, 16, 11);
   }
   cx.fillStyle="#0d0f12";
@@ -790,19 +924,17 @@ function drawEnemy(e){
   const x = e.x - cameraX, y = e.y;
   if(e.type==="towny"){
     const lurch = Math.sin(e.anim*2)*2;
-    cx.fillStyle="#4d5f53";                     // trousers
+    cx.fillStyle="#4d5f53";
     cx.fillRect(x+3, y+32, 8, 14); cx.fillRect(x+15, y+30, 8, 16);
-    cx.fillStyle="#7a937e";                     // rotten coat
+    cx.fillStyle="#7a937e";
     cx.fillRect(x+1, y+12, 24, 22);
     cx.fillStyle="#5d7361";
     cx.fillRect(x+1, y+12, 24, 4);
-    // reaching arms
     cx.fillStyle="#7a937e";
     const ad = player.x < e.x ? -1 : 1;
     cx.fillRect(x+(ad>0?20:-6), y+14+lurch, 12, 5);
     cx.fillStyle="#b3c9ab";
-    cx.fillRect(x+(ad>0?30:-8), y+14+lurch, 4, 5); // hand
-    // head
+    cx.fillRect(x+(ad>0?30:-8), y+14+lurch, 4, 5);
     cx.fillStyle="#b3c9ab"; cx.fillRect(x+5, y, 16, 13);
     cx.fillStyle="#1a221d";
     cx.fillRect(x+8, y+4, 3, 3); cx.fillRect(x+15, y+4, 3, 3);
@@ -821,13 +953,11 @@ function drawEnemy(e){
     cx.fillStyle="#ff5c42";
     cx.fillRect(x, y+5, 3, 3);
   }else if(e.type==="balloon"){
-    // string
     cx.strokeStyle="rgba(200,200,200,.5)";
     cx.beginPath();
     cx.moveTo(x+13, y+26);
     cx.quadraticCurveTo(x+18, y+40, x+11, y+54);
     cx.stroke();
-    // balloon
     cx.fillStyle="rgba(224,48,47,.16)";
     cx.beginPath(); cx.arc(x+13, y+13, 24, 0, Math.PI*2); cx.fill();
     cx.fillStyle="#e0302f";
@@ -862,15 +992,14 @@ function drawPickup(pk){
   if(pk.kind==="coat"){
     cx.fillStyle="rgba(232,195,58,.2)";
     cx.beginPath(); cx.arc(x+11,y+11,16,0,Math.PI*2); cx.fill();
-    cx.fillStyle="#e8c33a"; cx.fillRect(x+3,y+8,16,13);   // coat
-    cx.fillRect(x+6,y+2,10,8);                            // hood
+    cx.fillStyle="#e8c33a"; cx.fillRect(x+3,y+8,16,13);
+    cx.fillRect(x+6,y+2,10,8);
     cx.fillStyle="#b8952a"; cx.fillRect(x+3,y+18,16,3);
     cx.fillRect(x+10,y+8,2,10);
     return;
   }
   cx.fillStyle="rgba(223,232,238,.15)";
   cx.beginPath(); cx.arc(x+11,y+11,16,0,Math.PI*2); cx.fill();
-  // slingshot: Y frame + silver ball
   cx.strokeStyle="#7a5a38"; cx.lineWidth=3;
   cx.beginPath();
   cx.moveTo(x+11,y+20); cx.lineTo(x+11,y+12);
@@ -885,7 +1014,6 @@ function drawBoss(){
   const b=boss, x=b.x-cameraX, y=b.y;
   const fl = b.flash>0;
   if(b.phase==="clown"){
-    // balloon cluster in its fist
     for(let i=0;i<3;i++){
       const bx=x+8+i*15, by=y-34+Math.sin(frame*0.05+i)*4;
       cx.strokeStyle="rgba(210,210,210,.5)";
@@ -893,30 +1021,24 @@ function drawBoss(){
       cx.fillStyle = i===1 ? "#e0302f" : "#b01c22";
       cx.beginPath(); cx.ellipse(bx, by, 8, 10, 0, 0, Math.PI*2); cx.fill();
     }
-    // baggy suit
     cx.fillStyle = fl? "#efe7d8" : "#4a3a5c";
     cx.beginPath(); cx.ellipse(x+23, y+46, 22, 26, 0, 0, Math.PI*2); cx.fill();
     cx.fillStyle="#e0302f";
     cx.beginPath(); cx.arc(x+23,y+40,3,0,7); cx.fill();
     cx.beginPath(); cx.arc(x+23,y+52,3,0,7); cx.fill();
-    // ruff
     cx.fillStyle="#ded6c2";
     for(let i=0;i<5;i++){ cx.beginPath(); cx.arc(x+9+i*7, y+24, 5, 0, 7); cx.fill(); }
-    // head
     cx.fillStyle = fl? "#ffffff" : "#e6dfca";
     cx.beginPath(); cx.ellipse(x+23, y+10, 15, 17, 0, 0, Math.PI*2); cx.fill();
-    // wild side tufts
     cx.fillStyle="#b23a17";
     cx.beginPath(); cx.ellipse(x+6, y+6, 7, 10, 0.4, 0, 7); cx.fill();
     cx.beginPath(); cx.ellipse(x+40, y+6, 7, 10, -0.4, 0, 7); cx.fill();
-    // burning eyes
     const g=0.6+0.4*Math.sin(frame*0.1);
     cx.fillStyle=`rgba(255,176,46,${g})`;
     cx.beginPath(); cx.ellipse(x+17,y+7,3.5,4.5,0,0,7); cx.fill();
     cx.beginPath(); cx.ellipse(x+29,y+7,3.5,4.5,0,0,7); cx.fill();
     cx.fillStyle="#1a0d08";
     cx.fillRect(x+16,y+6,2,3); cx.fillRect(x+28,y+6,2,3);
-    // nose + hungry grin
     cx.fillStyle="#e0302f"; cx.beginPath(); cx.arc(x+23,y+14,3.5,0,7); cx.fill();
     cx.strokeStyle="#7a1116"; cx.lineWidth=2;
     cx.beginPath(); cx.arc(x+23, y+15, 10, 0.25, Math.PI-0.25); cx.stroke();
@@ -924,7 +1046,6 @@ function drawBoss(){
     cx.fillStyle="#efe7d8";
     for(let i=0;i<4;i++) cx.fillRect(x+16+i*4, y+21, 3, 3);
   }else{
-    // spider form: jointed legs
     cx.strokeStyle = fl? "#efe7d8" : "#2a1e38"; cx.lineWidth=3;
     for(let i=0;i<4;i++){
       const ph=Math.sin(frame*0.25+i*1.6)*6;
@@ -934,10 +1055,8 @@ function drawBoss(){
       cx.lineTo(x+b.w+6+i*8, y+8-ph); cx.lineTo(x+b.w+12+i*9, y+b.h+2); cx.stroke();
     }
     cx.lineWidth=1;
-    // bulbous body
     cx.fillStyle = fl? "#efe7d8" : "#3b2a4e";
     cx.beginPath(); cx.ellipse(x+b.w/2, y+22, 33, 21, 0, 0, Math.PI*2); cx.fill();
-    // the face it keeps
     cx.fillStyle="#e6dfca";
     cx.beginPath(); cx.ellipse(x+b.w/2, y+20, 13, 12, 0, 0, Math.PI*2); cx.fill();
     const g=0.6+0.4*Math.sin(frame*0.13);
@@ -951,11 +1070,9 @@ function drawBoss(){
   }
 }
 
-/* ---- UI ---- */
 function drawHUD(){
   cx.textAlign="left";
   cx.font="14px Georgia, serif";
-  // raincoat status
   cx.fillStyle="rgba(0,0,0,.45)";
   cx.fillRect(14,12,206,58);
   cx.strokeStyle="rgba(180,200,190,.2)"; cx.strokeRect(14.5,12.5,206,58);
@@ -970,7 +1087,6 @@ function drawHUD(){
     cx.beginPath(); cx.moveTo(26,20); cx.lineTo(48,46); cx.moveTo(48,20); cx.lineTo(26,46); cx.stroke();
     cx.fillStyle="#8b6f70"; cx.fillText("gone, Georgie", 60, 50);
   }
-  // weapon
   cx.fillStyle="#cfd8cf";
   cx.fillText(player.weapon==="silver"? "SILVER SLUG" : "ROCK", 130, 32);
   if(player.weapon==="silver"){
@@ -978,7 +1094,6 @@ function drawHUD(){
   }else{
     cx.fillStyle="#9c9384"; cx.fillRect(134,38,10,10);
   }
-  // right column
   cx.textAlign="right";
   cx.fillStyle="rgba(0,0,0,.45)";
   cx.fillRect(W-190,12,176,58);
@@ -1003,7 +1118,6 @@ function drawHUD(){
 }
 
 function drawTitle(){
-  // rising balloons
   for(const b of titleBalloons){
     cx.globalAlpha = 0.35 + b.s*0.3;
     cx.fillStyle="#a11a20";
@@ -1034,11 +1148,10 @@ function drawTitle(){
   cx.fillText("The raincoat is the armor.", W/2, 332);
   cx.fillText("You get two mistakes. The sewer gets the rest.", W/2, 358);
 
-  // difficulty selector
   const D = DIFFS[difficulty];
   cx.fillStyle="#5d6a5f";
   cx.font="13px Georgia, serif";
-  cx.fillText("\u2191\u2193  choose your Derry", W/2, 398);
+  cx.fillText("▲▼  choose your Derry (or tap D-pad)", W/2, 398);
   cx.fillStyle = difficulty===0 ? "#a9bfa4" : "#c46a4a";
   cx.font="600 20px Georgia, serif";
   spaced(D.name, W/2, 420, 4);
@@ -1049,25 +1162,23 @@ function drawTitle(){
   const pulse = 0.6+0.4*Math.sin(frame*0.06);
   cx.fillStyle=`rgba(229,220,195,${pulse})`;
   cx.font="600 30px Georgia, serif";
-  cx.fillText("PRESS ENTER", W/2, 478);
+  cx.fillText("TAP OR PRESS ENTER TO START", W/2, 478);
 
   cx.fillStyle="#5d6a5f";
   cx.font="15px Georgia, serif";
   cx.fillText("one raincoat · two hits · endless sewers", W/2, 504);
   cx.fillStyle="#47524a";
   cx.font="13px Georgia, serif";
-  cx.fillText("arrows — move & duck · space — throw · M — mute", W/2, 528);
+  cx.fillText("d-pad — move & duck · buttons — jump & throw", W/2, 528);
   cx.textAlign="left";
 }
+
 function drawDrainClown(){
-  // storm drain, bottom-left
   const dx=52, dw=224, top=H-152;
-  // curb above the opening
   cx.fillStyle="#1c2822";
   cx.fillRect(dx-18, top-16, dw+36, 18);
   cx.fillStyle="#2f4638";
   cx.fillRect(dx-18, top-16, dw+36, 4);
-  // the dark mouth of the drain
   cx.fillStyle="#010302";
   cx.beginPath();
   cx.moveTo(dx, H); cx.lineTo(dx, top+34);
@@ -1078,29 +1189,23 @@ function drawDrainClown(){
   cx.lineWidth=1;
 
   const fx=dx+dw/2, fy=top+96 + Math.sin(frame*0.017)*3;
-  // pale face, only half out of the dark
   cx.fillStyle="rgba(226,221,203,0.92)";
   cx.beginPath(); cx.ellipse(fx, fy, 36, 42, 0, 0, Math.PI*2); cx.fill();
-  // shadow swallowing the top of the head
   const sg=cx.createLinearGradient(0,fy-46,0,fy-2);
   sg.addColorStop(0,"rgba(1,3,2,1)");
   sg.addColorStop(1,"rgba(1,3,2,0)");
   cx.fillStyle=sg; cx.fillRect(fx-44, fy-48, 88, 46);
-  // ragged side tufts
   cx.fillStyle="#8f2c10";
   cx.beginPath(); cx.ellipse(fx-34, fy-8, 9, 14, 0.45, 0, Math.PI*2); cx.fill();
   cx.beginPath(); cx.ellipse(fx+34, fy-8, 9, 14, -0.45, 0, Math.PI*2); cx.fill();
-  // burning eyes, pulsing
   const g=0.55+0.45*Math.sin(frame*0.055);
   cx.fillStyle=`rgba(255,176,46,${g})`;
   cx.beginPath(); cx.ellipse(fx-13, fy-6, 5, 7, 0, 0, Math.PI*2); cx.fill();
   cx.beginPath(); cx.ellipse(fx+13, fy-6, 5, 7, 0, 0, Math.PI*2); cx.fill();
   cx.fillStyle="#160a05";
   cx.fillRect(fx-14, fy-8, 3, 5); cx.fillRect(fx+11, fy-8, 3, 5);
-  // nose
   cx.fillStyle="#d92b32";
   cx.beginPath(); cx.arc(fx, fy+4, 5, 0, Math.PI*2); cx.fill();
-  // the grin: too wide, too many teeth
   cx.strokeStyle="#7a1116"; cx.lineWidth=3;
   cx.beginPath(); cx.arc(fx, fy+6, 22, 0.35, Math.PI-0.35); cx.stroke();
   cx.lineWidth=1;
@@ -1109,7 +1214,6 @@ function drawDrainClown(){
     const a=0.5+i*(Math.PI-1)/6;
     cx.fillRect(fx+Math.cos(Math.PI-a)*20-2, fy+6+Math.sin(a)*18, 4, 5);
   }
-  // one balloon, offered up from the dark
   const by = top-46 + Math.sin(frame*0.02)*5;
   cx.strokeStyle="rgba(210,210,210,.45)";
   cx.beginPath(); cx.moveTo(fx+52, by+14);
@@ -1121,7 +1225,6 @@ function drawDrainClown(){
 }
 
 function spaced(txt, x, y, gap){
-  // letter-spaced centered text
   let widths = [...txt].map(ch=>cx.measureText(ch).width);
   let total = widths.reduce((a,b)=>a+b,0) + gap*(txt.length-1);
   let px = x - total/2;
@@ -1144,7 +1247,7 @@ function drawGameOver(){
   const pulse = 0.6+0.4*Math.sin(frame*0.06);
   cx.fillStyle=`rgba(229,220,195,${pulse})`;
   cx.font="600 26px Georgia, serif";
-  cx.fillText("PRESS ENTER TO GO BACK DOWN", W/2, 348);
+  cx.fillText("TAP OR PRESS ENTER TO GO BACK DOWN", W/2, 348);
   cx.textAlign="left";
 }
 
